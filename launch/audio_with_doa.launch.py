@@ -1,0 +1,18 @@
+# audio_with_doa.launch.py
+
+import launch
+from launch import LaunchDescription
+from launch.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        # AudioWithDOA 퍼블리셔 노드를 실행
+        Node(
+            package='respeaker_ros2',
+            executable='audio_with_doa_publisher',
+            name='audio_with_doa_publisher',
+            output='screen',
+            parameters=[{'param_name': 'param_value'}],  # 필요한 파라미터를 여기에 설정할 수 있습니다.
+            remappings=[('/audio_with_doa', '/audio_with_doa')]  # 토픽 이름 재매핑
+        ),
+    ])
