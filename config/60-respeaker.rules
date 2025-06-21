@@ -1,0 +1,4 @@
+# 60-respeaker.rules
+
+# ReSpeaker 4 Mic Array 장치에 대한 udev 규칙
+SUBSYSTEM=="usb", ATTR{idVendor}=="2886", ATTR{idProduct}=="0018", MODE:="0666"
