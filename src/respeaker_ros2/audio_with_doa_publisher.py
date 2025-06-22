@@ -9,6 +9,7 @@ import usb.core, usb.util
 import struct
 import threading
 import re
+import subprocess
 
 # ReSpeaker USB Mic Array의 DSP 파라미터 목록 (tuning.py의 PARAMETERS 정의 통합)
 PARAMETERS = {
@@ -149,6 +150,13 @@ class Tuning:
         """Release the USB device resource."""
         usb.util.dispose_resources(self.dev)
 
+def find_respeaker_device(vid=0x2886, pid=0x0018):
+    """Find the ReSpeaker USB Mic Array device and return a Tuning interface object."""
+    dev = usb.core.find(idVendor=vid, idProduct=pid)
+    if not dev:
+        return None
+    return Tuning(dev)
+
 class AudioWithDOAPublisher(Node):
     def __init__(self):
         super().__init__('audio_with_doa_publisher')
@@ -159,22 +167,19 @@ class AudioWithDOAPublisher(Node):
         self.rate = 16000
         self.channels = 6
         self.chunk = 1024
-        self.pattern = re.compile(r'device\s+(\d+)', re.IGNORECASE)
         # ReSpeaker 장치 인덱스 탐색 (이름으로 검색)
         self.device_index = None
-        for i in range(self.audio.get_device_count()):
-            dev_info = self.audio.get_device_info_by_index(i)
-            name = dev_info.get('name', '').lower()
-            # 'respeaker' 포함 여부 체크
-            if 'respeaker' in name:
-                dev_number = self.audio.get_device_info_by_index(i)
-                # device 번호 추출
-                match = self.pattern.search(dev_number)
-                if match:
-                    self.device_number = int(match.group(1))
+        output = subprocess.check_output(['arecord', '-l']).decode()
+        for line in output.splitlines():
+            if 'ReSpeaker' in line:
+                num = re.search(r'device\s+(\d+)', line, flags=re.IGNORECASE)
+                if num:
+                    self.device_index = int(num.group(1))
+
         if self.device_index is None:
             self.get_logger().error('ReSpeaker 마이크 장치를 찾을 수 없습니다.')
             raise RuntimeError('ReSpeaker device not found')
+        
         # 오디오 스트림 열기
         self.stream = self.audio.open(
             rate=self.rate,
@@ -192,17 +197,23 @@ class AudioWithDOAPublisher(Node):
             # DOA 사용 불가이므로 dev 없이 진행 (필요시 return이나 예외 처리)
         else:
             self.mic_tuning = Tuning(dev)
+            self.get_logger().info('complete to call the tuning')
         # 타이머 설정: 주기적으로 _publish_audio 호출
+        self.get_logger().info('before: call the time period')
+
         timer_period =  float(self.chunk) / float(self.rate)  # 청크 당 소요 시간(초)
+        self.get_logger().info('before: call the publish func')
         self.timer = self.create_timer(timer_period, self._publish_audio)
+        self.get_logger().info('after: call the publish func')
 
     def _publish_audio(self):
         try:
             # 장치 연결 확인 <-- 수정된 부분
             if not usb.core.find(idVendor=0x2886, idProduct=0x0018):  # 장치 연결 해제 시 확인
                 raise RuntimeError('ReSpeaker device disconnected')  # 장치 연결이 끊어졌을 때 예외 발생
-       
+            self.get_logger().info("start to received the data")
             data = self.stream.read(self.chunk, exception_on_overflow=False)
+            self.get_logger().info("well_received the data", data)
         except Exception as e:
             self.get_logger().error(f'장치가 인식 안됨: {e}')
             self.destroy()  # <-- 연결이 끊어지면 리소스 정리 후 종료
@@ -210,11 +221,13 @@ class AudioWithDOAPublisher(Node):
         # 6채널 데이터를 numpy로 변환하여 channel 0 추출
         pcm_data = np.frombuffer(data, dtype=np.int16)
         mono_data = pcm_data[0::self.channels]  # channel 0 데이터 추출:contentReference[oaicite:9]{index=9}
+        self.get_logger().info("audio_data: ", mono_data)
         # DOA 값 읽기
         doa_value = None
         if hasattr(self, 'mic_tuning'):
             try:
                 doa_value = int(self.mic_tuning.direction)  # Int32로 변환
+                self.get_logger().info("doa_value: ",doa_value)
             except Exception as e:
                 self.get_logger().warn(f'DOA 읽기 실패: {e}')
                 doa_value = 0
@@ -226,7 +239,7 @@ class AudioWithDOAPublisher(Node):
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'respeaker_base'
         msg.audio = mono_data.tolist()  # numpy array -> list[int]
-        msg.doa = Int32(data=doa_value if doa_value is not None else 0)
+        msg.doa = int(data=doa_value if doa_value is not None else 0)
         self.pub.publish(msg)
         # (옵션) 로그 출력
         self.get_logger().debug(f'Published audio chunk with {len(msg.audio)} samples, DOA={msg.doa.data}°')
