@@ -5,8 +5,7 @@ package_name = 'respeaker_ros2'
 setup(
     name=package_name,
     version='0.0.1',
-    packages=[package_name],
-    install_requires=['setuptools'],
+    packages=[package_name],  # 패키지 이름을 여기에 지정
     zip_safe=True,
     author='Jiseon Kim',
     author_email='ji.dozin@gmail.com',
@@ -15,9 +14,4 @@ setup(
     description='ROS 2 package for ReSpeaker USB Microphone Array v2.0 to publish audio data and DOA.',
     license='Apache 2.0',
     tests_require=['pytest'],
-    entry_points={
-        'console_scripts': [
-            'audio_with_doa_publisher = respeaker_ros2.audio_with_doa_publisher:main',
-        ],
-    },
 )
