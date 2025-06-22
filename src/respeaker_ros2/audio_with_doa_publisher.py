@@ -205,7 +205,7 @@ class AudioWithDOAPublisher(Node):
        
             data = self.stream.read(self.chunk, exception_on_overflow=False)
         except Exception as e:
-            self.get_logger().error(f'오디오 스트림 읽기 오류: {e}')
+            self.get_logger().error(f'장치가 인식 안됨: {e}')
             self.destroy()  # <-- 연결이 끊어지면 리소스 정리 후 종료
             return
         # 6채널 데이터를 numpy로 변환하여 channel 0 추출
