@@ -1,11 +1,12 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 package_name = 'respeaker_ros2'
 
 setup(
     name=package_name,
     version='0.0.1',
-    packages=[package_name],  # 패키지 이름을 여기에 지정
+    packages=find_packages(where='src'),
+    package_dir={'': 'src'},
     zip_safe=True,
     author='Jiseon Kim',
     author_email='ji.dozin@gmail.com',
