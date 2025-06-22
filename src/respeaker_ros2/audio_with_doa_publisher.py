@@ -236,7 +236,7 @@ class AudioWithDOAPublisher(Node):
             if self.tuning is not None:
                 try:
                     doa_value = int(self.tuning.direction)
-                catch Exception as e:
+                except Exception as e:
                     self.get_logger().error(f'DOA read failed: {e}')
                     doa_value = -1
             msg.doa = doa_value
