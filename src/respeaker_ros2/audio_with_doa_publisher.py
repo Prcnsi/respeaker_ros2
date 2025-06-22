@@ -3,7 +3,7 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Int32, Header
-from respeaker_ros2.msg.msg import AudioDataWithDOA  # 패키지명 변경
+from respeaker_ros2.msg import AudioDataWithDOA  # 패키지명 변경
 
 import pyaudio, numpy as np
 import usb.core, usb.util
