@@ -7,7 +7,7 @@ from respeaker_ros2.msg import AudioDataWithDOA  # 패키지명 변경
 
 import pyaudio, numpy as np
 import usb.core, usb.util
-from tuning import Tuning  # ReSpeaker의 Tuning 클래스 (usb_4_mic_array 패키지 제공)
+from respeaker_ros2.tuning import Tuning  # ReSpeaker의 Tuning 클래스 (usb_4_mic_array 패키지 제공)
 
 class AudioWithDOAPublisher(Node):
     def __init__(self):
