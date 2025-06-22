@@ -158,14 +158,19 @@ class AudioWithDOAPublisher(Node):
         self.rate = 16000
         self.channels = 6
         self.chunk = 1024
+        self.pattern = re.compile(r'device\s+(\d+)', re.IGNORECASE)
         # ReSpeaker 장치 인덱스 탐색 (이름으로 검색)
         self.device_index = None
         for i in range(self.audio.get_device_count()):
             dev_info = self.audio.get_device_info_by_index(i)
-            name = dev_info.get('name','').lower()
+            name = dev_info.get('name', '').lower()
+            # 'respeaker' 포함 여부 체크
             if 'respeaker' in name:
-                self.device_index = i
-                break
+                dev_number = self.audio.get_device_info_by_index(i)
+                # device 번호 추출
+                match = self.pattern.search(dev_number)
+                if match:
+                    self.device_number = int(match.group(1))
         if self.device_index is None:
             self.get_logger().error('ReSpeaker 마이크 장치를 찾을 수 없습니다.')
             raise RuntimeError('ReSpeaker device not found')
