@@ -53,9 +53,14 @@ class AudioWithDOAPublisher(Node):
 
     def _publish_audio(self):
         try:
+            # 장치 연결 확인 <-- 수정된 부분
+            if not usb.core.find(idVendor=0x2886, idProduct=0x0018):  # 장치 연결 해제 시 확인
+                raise RuntimeError('ReSpeaker device disconnected')  # 장치 연결이 끊어졌을 때 예외 발생
+       
             data = self.stream.read(self.chunk, exception_on_overflow=False)
         except Exception as e:
             self.get_logger().error(f'오디오 스트림 읽기 오류: {e}')
+            self.destroy()  # <-- 연결이 끊어지면 리소스 정리 후 종료
             return
         # 6채널 데이터를 numpy로 변환하여 channel 0 추출
         pcm_data = np.frombuffer(data, dtype=np.int16)
