@@ -148,13 +148,6 @@ class Tuning:
         """Release the USB device resource."""
         usb.util.dispose_resources(self.dev)
 
-def find_respeaker_device(vid=0x2886, pid=0x0018):
-    """Find the ReSpeaker USB Mic Array device and return a Tuning interface object."""
-    dev = usb.core.find(idVendor=vid, idProduct=pid)
-    if not dev:
-        return None
-    return Tuning(dev)
-
 class AudioWithDOAPublisher(Node):
     def __init__(self):
         super().__init__('audio_with_doa_publisher')
