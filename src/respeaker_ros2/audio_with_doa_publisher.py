@@ -8,6 +8,7 @@ import pyaudio, numpy as np
 import usb.core, usb.util
 import struct
 import threading
+import re
 
 # ReSpeaker USB Mic Array의 DSP 파라미터 목록 (tuning.py의 PARAMETERS 정의 통합)
 PARAMETERS = {
