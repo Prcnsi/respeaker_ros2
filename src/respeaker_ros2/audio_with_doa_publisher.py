@@ -251,3 +251,5 @@ def main(args=None):
         # 노드 및 리소스 정리
         node.destroy()
         rclpy.shutdown()
+
+main()
