@@ -177,7 +177,7 @@ class AudioWithDOAPublisher(Node):
                     self.device_index = int(num.group(1))
 
         if self.device_index is None:
-            self.get_logger().error('ReSpeaker 마이크 장치를 찾을 수 없습니다.')
+            self.get_logger().error('ReSpeaker microphone device not found.')
             raise RuntimeError('ReSpeaker device not found')
         
         # 오디오 스트림 열기
@@ -197,60 +197,74 @@ class AudioWithDOAPublisher(Node):
             # DOA 사용 불가이므로 dev 없이 진행 (필요시 return이나 예외 처리)
         else:
             self.mic_tuning = Tuning(dev)
-            self.get_logger().info('complete to call the tuning')
-        # 타이머 설정: 주기적으로 _publish_audio 호출
-        self.get_logger().info('before: call the time period')
+            self.get_logger().info('Tuning interface initialized for DOA')
+        # Start a background thread for continuous audio capture and publishing
+        self._running = True  # <---- Flag to control the thread loop
+        self.audio_thread = threading.Thread(target=self._audio_capture_loop, daemon=True)  # <---- Create daemon thread
+        self.audio_thread.start()  # <---- Start the audio capture thread
+        self.get_logger().info('Audio capture thread started.')  # <---- Log thread start
 
-        timer_period =  float(self.chunk) / float(self.rate)  # 청크 당 소요 시간(초)
-        self.get_logger().info('before: call the publish func')
-        self.timer = self.create_timer(timer_period, self._publish_audio)
-        self.get_logger().info('after: call the publish func')
-
-    def _publish_audio(self):
-        try:
-            # 장치 연결 확인 <-- 수정된 부분
-            if not usb.core.find(idVendor=0x2886, idProduct=0x0018):  # 장치 연결 해제 시 확인
-                raise RuntimeError('ReSpeaker device disconnected')  # 장치 연결이 끊어졌을 때 예외 발생
-            self.get_logger().info("start to received the data")
-            data = self.stream.read(self.chunk, exception_on_overflow=False)
-            self.get_logger().info("well_received the data", data)
-        except Exception as e:
-            self.get_logger().error(f'장치가 인식 안됨: {e}')
-            self.destroy()  # <-- 연결이 끊어지면 리소스 정리 후 종료
-            return
-        # 6채널 데이터를 numpy로 변환하여 channel 0 추출
-        pcm_data = np.frombuffer(data, dtype=np.int16)
-        mono_data = pcm_data[0::self.channels]  # channel 0 데이터 추출:contentReference[oaicite:9]{index=9}
-        self.get_logger().info("audio_data: ", mono_data)
-        # DOA 값 읽기
-        doa_value = None
-        if hasattr(self, 'mic_tuning'):
+    def _audio_capture_loop(self):
+        """Continuously capture audio and DOA in a separate thread."""
+        while self._running:
             try:
-                doa_value = int(self.mic_tuning.direction)  # Int32로 변환
-                self.get_logger().info("doa_value: ",doa_value)
+                # Check if device is still connected
+                if usb.core.find(idVendor=0x2886, idProduct=0x0018) is None:
+                    raise RuntimeError('ReSpeaker device disconnected')
+                # Read one chunk of audio data from the stream
+                self.get_logger().debug('Reading audio chunk...')  # <---- Debug log for reading
+                data = self.stream.read(self.chunk, exception_on_overflow=False)
             except Exception as e:
-                self.get_logger().warn(f'DOA 읽기 실패: {e}')
-                doa_value = 0
-        else:
-            doa_value = 0  # 장치 미발견시 0으로 처리 또는 이전 값 유지
-        # 메시지 구성 및 퍼블리시
-        msg = AudioDataWithDOA()
-        msg.header = Header()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'respeaker_base'
-        msg.audio = mono_data.tolist()  # numpy array -> list[int]
-        msg.doa = int(data=doa_value if doa_value is not None else 0)
-        self.pub.publish(msg)
-        # (옵션) 로그 출력
-        self.get_logger().debug(f'Published audio chunk with {len(msg.audio)} samples, DOA={msg.doa.data}°')
+                self.get_logger().error(f'Audio capture error: {e}')  # <---- Log any read/USB errors
+                # On error (e.g., device disconnected), break the loop and shutdown
+                self._running = False  # <---- Stop the loop
+                rclpy.shutdown()      # <---- Signal ROS to shutdown (ends spin)
+                break
+            # Convert interleaved 6-channel audio to mono using channel 0
+            pcm_data = np.frombuffer(data, dtype=np.int16)
+            mono_data = pcm_data[0::self.channels]  # channel 0 audio data  # <----
+            # Read DOA value from the device
+            doa_value = 0
+            if hasattr(self, 'mic_tuning'):
+                try:
+                    doa_value = int(self.mic_tuning.direction)
+                except Exception as e:
+                    self.get_logger().warning(f'Failed to read DOA: {e}')  # <---- Warn if DOA read fails
+                    doa_value = 0
+            # Construct the AudioDataWithDOA message
+            msg = AudioDataWithDOA()
+            msg.header = Header()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = 'respeaker_base'
+            msg.audio = mono_data.tolist()
+            msg.doa = Int32()               # <---- Create Int32 message for DOA
+            msg.doa.data = doa_value        # <---- Set DOA angle value
+            self.pub.publish(msg)
+            self.get_logger().debug(f'Published audio chunk with {len(msg.audio)} samples, DOA={msg.doa.data}°')  # <---- Debug log for published data
 
     def destroy(self):
-        # 리소스 정리
-        self.stream.stop_stream()
+        """Clean up resources and stop the audio thread."""
+        # Signal the audio thread to stop
+        self._running = False  # <----
+        try:
+            if self.stream.is_active():
+                self.stream.stop_stream()
+        except Exception as e:
+            self.get_logger().warn(f'Error stopping stream: {e}')  # <---- Warn if stream stop fails
+        # Close audio stream and terminate PyAudio
         self.stream.close()
         self.audio.terminate()
-        self.get_logger().info('오디오 스트림을 종료하였습니다.')
-        super().destroy_node()
+        self.get_logger().info('Audio stream closed.')  # <---- Log stream closure
+        # Dispose of USB tuning resources if initialized
+        if hasattr(self, 'mic_tuning'):
+            try:
+                self.mic_tuning.close()
+            except Exception as e:
+                self.get_logger().warn(f'Error closing tuning interface: {e}')  # <----
+        # Wait for the audio thread to finish
+        if hasattr(self, 'audio_thread') and self.audio_thread.is_alive():
+            self.audio_thread.join(timeout=1.0)  # <---- Join thread (with timeout for safety)
+        super().destroy_node()  # Destroy the ROS node
 
 def main(args=None):
     rclpy.init(args=args)
