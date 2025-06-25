@@ -13,6 +13,7 @@ import re
 import subprocess
 import time
 from statistics import median
+import os
 
 # ReSpeaker USB Mic Array의 DSP 파라미터 목록 (tuning.py의 PARAMETERS 정의 통합)
 PARAMETERS = {
@@ -160,9 +161,11 @@ def find_respeaker_device(vid=0x2886, pid=0x0018):
         return None
     return Tuning(dev)
 
+
 class AudioWithDOAPublisher(Node):
     def __init__(self):
         super().__init__('audio_with_doa_publisher')
+        self.get_logger().info("init called")
         self.pub = self.create_publisher(AudioDataWithDOA, 'audio_with_doa', 10)
 
         self.audio = pyaudio.PyAudio()
@@ -177,10 +180,9 @@ class AudioWithDOAPublisher(Node):
                 num = re.search(r'device\s+(\d+)', line, flags=re.IGNORECASE)
                 if num:
                     self.device_index = int(num.group(1))
-
         if self.device_index is None:
             raise RuntimeError('ReSpeaker device not found')
-
+        
         self.stream = self.audio.open(
             rate=self.rate,
             format=pyaudio.paInt16,
@@ -252,6 +254,7 @@ class AudioWithDOAPublisher(Node):
                 msg.audio = audio_data.tolist()
                 msg.doa = Int32(data=doa_value)
 
+                self.get_logger().info(f"[PUB] Publishing audio len={len(msg.audio)}, doa={doa_value}")
                 self.pub.publish(msg)
             except queue.Empty:
                 continue
@@ -284,4 +287,7 @@ def main(args=None):
         rclpy.shutdown()
 
 if __name__ == '__main__':
+    p=pyaudio.PyAudio()
+    dev_info=p.get_device_info_by_index(0)
+    print(dev_info['name'], 'max_input_channel',dev_info['maxInputChannels'])
     main()
