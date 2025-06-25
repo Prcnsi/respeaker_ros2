@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Header  # Int32 메시지는 AudioDataWithDOA 정의에 사용됨
+from std_msgs.msg import Header, Int32  # Int32 메시지는 AudioDataWithDOA 정의에 사용됨
 from respeaker_ros2.msg import AudioDataWithDOA
 
 import pyaudio, numpy as np
 import usb.core, usb.util
 import struct
 import threading
+import queue
 import re
 import subprocess
 
@@ -160,15 +161,14 @@ def find_respeaker_device(vid=0x2886, pid=0x0018):
 class AudioWithDOAPublisher(Node):
     def __init__(self):
         super().__init__('audio_with_doa_publisher')
-        # 퍼블리셔 생성
         self.pub = self.create_publisher(AudioDataWithDOA, 'audio_with_doa', 10)
-        # PyAudio 설정
+
         self.audio = pyaudio.PyAudio()
         self.rate = 16000
         self.channels = 6
         self.chunk = 1024
-        # ReSpeaker 장치 인덱스 탐색 (이름으로 검색)
         self.device_index = None
+
         output = subprocess.check_output(['arecord', '-l']).decode()
         for line in output.splitlines():
             if 'ReSpeaker' in line:
@@ -177,10 +177,8 @@ class AudioWithDOAPublisher(Node):
                     self.device_index = int(num.group(1))
 
         if self.device_index is None:
-            self.get_logger().error('ReSpeaker microphone device not found.')
             raise RuntimeError('ReSpeaker device not found')
-        
-        # 오디오 스트림 열기
+
         self.stream = self.audio.open(
             rate=self.rate,
             format=pyaudio.paInt16,
@@ -189,82 +187,88 @@ class AudioWithDOAPublisher(Node):
             input_device_index=self.device_index,
             frames_per_buffer=self.chunk
         )
-        self.get_logger().info(f'ReSpeaker 스트림 시작 (device index={self.device_index}, rate={self.rate}Hz)...')
-        # USB 장치 초기화 (DOA용)
-        dev = usb.core.find(idVendor=0x2886, idProduct=0x0018)
-        if not dev:
-            self.get_logger().error('ReSpeaker USB Mic Array 장치를 찾을 수 없습니다 (DOA 불가).')
-            # DOA 사용 불가이므로 dev 없이 진행 (필요시 return이나 예외 처리)
-        else:
-            self.mic_tuning = Tuning(dev)
-            self.get_logger().info('Tuning interface initialized for DOA')
-        # Start a background thread for continuous audio capture and publishing
-        self._running = True  # <---- Flag to control the thread loop
-        self.audio_thread = threading.Thread(target=self._audio_capture_loop, daemon=True)  # <---- Create daemon thread
-        self.audio_thread.start()  # <---- Start the audio capture thread
-        self.get_logger().info('Audio capture thread started.')  # <---- Log thread start
 
-    def _audio_capture_loop(self):
-        """Continuously capture audio and DOA in a separate thread."""
-        while self._running:
+        dev = usb.core.find(idVendor=0x2886, idProduct=0x0018)
+        self.mic_tuning = Tuning(dev) if dev else None
+
+        self.msg_queue = queue.Queue()
+        self.doa_buffer = []  # (timestamp, doa) 리스트
+        self.shutdown_flag = threading.Event()
+
+        self.capture_thread = threading.Thread(target=self.read_audio_loop, daemon=True)
+        self.publish_thread = threading.Thread(target=self.publish_loop, daemon=True)
+        self.doa_thread = threading.Thread(target=self.read_doa_loop, daemon=True)
+
+        self.capture_thread.start()
+        self.publish_thread.start()
+        self.doa_thread.start()
+
+    def read_audio_loop(self):
+        while not self.shutdown_flag.is_set():
             try:
-                # Check if device is still connected
-                if usb.core.find(idVendor=0x2886, idProduct=0x0018) is None:
-                    raise RuntimeError('ReSpeaker device disconnected')
-                # Read one chunk of audio data from the stream
-                self.get_logger().debug('Reading audio chunk...')  # <---- Debug log for reading
+                t_start = time.time()
                 data = self.stream.read(self.chunk, exception_on_overflow=False)
+                t_end = time.time()
+
+                stamp_ros = self.get_clock().now().to_msg()
+                pcm_data = np.frombuffer(data, dtype=np.int16)
+                mono_data = pcm_data[0::self.channels]
+
+                self.msg_queue.put((stamp_ros, t_start, t_end, mono_data))
             except Exception as e:
-                self.get_logger().error(f'Audio capture error: {e}')  # <---- Log any read/USB errors
-                # On error (e.g., device disconnected), break the loop and shutdown
-                self._running = False  # <---- Stop the loop
-                rclpy.shutdown()      # <---- Signal ROS to shutdown (ends spin)
-                break
-            # Convert interleaved 6-channel audio to mono using channel 0
-            pcm_data = np.frombuffer(data, dtype=np.int16)
-            mono_data = pcm_data[0::self.channels]  # channel 0 audio data  # <----
-            # Read DOA value from the device
-            doa_value = 0
-            if hasattr(self, 'mic_tuning'):
-                try:
-                    doa_value = int(self.mic_tuning.direction)
-                except Exception as e:
-                    self.get_logger().warning(f'Failed to read DOA: {e}')  # <---- Warn if DOA read fails
-                    doa_value = 0
-            # Construct the AudioDataWithDOA message
-            msg = AudioDataWithDOA()
-            msg.header = Header()
-            msg.header.stamp = self.get_clock().now().to_msg()
-            msg.header.frame_id = 'respeaker_base'
-            msg.audio = mono_data.tolist()
-            msg.doa = Int32()               # <---- Create Int32 message for DOA
-            msg.doa.data = doa_value        # <---- Set DOA angle value
-            self.pub.publish(msg)
-            self.get_logger().debug(f'Published audio chunk with {len(msg.audio)} samples, DOA={msg.doa.data}°')  # <---- Debug log for published data
+                self.get_logger().error(f'Read error: {e}')
+                self.shutdown_flag.set()
+
+    def read_doa_loop(self):
+        while not self.shutdown_flag.is_set():
+            try:
+                t_now = time.time()
+                doa = self.mic_tuning.direction if self.mic_tuning else 0
+                self.doa_buffer.append((t_now, doa))
+                # 오래된 값 제거 (10초 이상된 값 제거)
+                self.doa_buffer = [(t, v) for t, v in self.doa_buffer if t_now - t <= 10.0]
+                time.sleep(0.01)  # 100Hz 주기로 샘플링
+            except Exception as e:
+                self.get_logger().warn(f'DOA read error: {e}')
+
+    def find_avg_doa(self, t_start, t_end):
+        window = [v for t, v in self.doa_buffer if t_start <= t <= t_end]
+        if not window:
+            return 0
+        return int(median(window))  # 중앙값 사용으로 더 안정적인 대표값 추정
+
+    def publish_loop(self):
+        while not self.shutdown_flag.is_set():
+            try:
+                stamp_ros, t_start, t_end, audio_data = self.msg_queue.get(timeout=1)
+                doa_value = self.find_avg_doa(t_start, t_end)
+
+                msg = AudioDataWithDOA()
+                msg.header = Header()
+                msg.header.stamp = stamp_ros
+                msg.header.frame_id = 'respeaker_base'
+                msg.audio = audio_data.tolist()
+                msg.doa = Int32(data=doa_value)
+
+                self.pub.publish(msg)
+            except queue.Empty:
+                continue
 
     def destroy(self):
-        """Clean up resources and stop the audio thread."""
-        # Signal the audio thread to stop
-        self._running = False  # <----
-        try:
-            if self.stream.is_active():
-                self.stream.stop_stream()
-        except Exception as e:
-            self.get_logger().warn(f'Error stopping stream: {e}')  # <---- Warn if stream stop fails
-        # Close audio stream and terminate PyAudio
+        self.shutdown_flag.set()
+        self.capture_thread.join()
+        self.publish_thread.join()
+        self.doa_thread.join()
+
+        if self.stream.is_active():
+            self.stream.stop_stream()
         self.stream.close()
         self.audio.terminate()
-        self.get_logger().info('Audio stream closed.')  # <---- Log stream closure
-        # Dispose of USB tuning resources if initialized
-        if hasattr(self, 'mic_tuning'):
-            try:
-                self.mic_tuning.close()
-            except Exception as e:
-                self.get_logger().warn(f'Error closing tuning interface: {e}')  # <----
-        # Wait for the audio thread to finish
-        if hasattr(self, 'audio_thread') and self.audio_thread.is_alive():
-            self.audio_thread.join(timeout=1.0)  # <---- Join thread (with timeout for safety)
-        super().destroy_node()  # Destroy the ROS node
+
+        if self.mic_tuning:
+            self.mic_tuning.close()
+
+        super().destroy_node()
 
 def main(args=None):
     rclpy.init(args=args)
@@ -272,10 +276,10 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info('노드 종료 신호 수신 (Ctrl+C)')
+        pass
     finally:
-        # 노드 및 리소스 정리
         node.destroy()
         rclpy.shutdown()
 
-main()
+if __name__ == '__main__':
+    main()
