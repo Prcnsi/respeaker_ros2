@@ -20,6 +20,4 @@ install(PROGRAMS src/respeaker_ros2/audio_with_doa_publisher.py
 
 # 추가: 메시지 설치 후 인터페이스 포함 <----
 ament_export_dependencies(rosidl_default_runtime)  # <----
-ament_export_include_directories(include)           # <----
-ament_export_interfaces(${PROJECT_NAME})            # <----
 ament_package()
