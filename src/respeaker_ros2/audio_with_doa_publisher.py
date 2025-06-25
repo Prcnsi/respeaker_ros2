@@ -11,6 +11,8 @@ import threading
 import queue
 import re
 import subprocess
+import time
+from statistics import median
 
 # ReSpeaker USB Mic Array의 DSP 파라미터 목록 (tuning.py의 PARAMETERS 정의 통합)
 PARAMETERS = {
