@@ -174,7 +174,6 @@ class AudioWithDOAPublisher(Node):
         self.chunk = 1024
         self.device_index = None
 
-        output = subprocess.check_output(['arecord', '-l']).decode()
         for i in range(self.p.get_device_count()):
             info = self.p.get_device_info_by_index(i)
             if 'ReSpeaker' in info['name']:
