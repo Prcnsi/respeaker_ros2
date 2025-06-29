@@ -175,11 +175,11 @@ class AudioWithDOAPublisher(Node):
         self.device_index = None
 
         output = subprocess.check_output(['arecord', '-l']).decode()
-        for line in output.splitlines():
-            if 'ReSpeaker' in line:
-                num = re.search(r'device\s+(\d+)', line, flags=re.IGNORECASE)
-                if num:
-                    self.device_index = int(num.group(1))
+        for i in range(self.p.get_device_count()):
+            info = self.p.get_device_info_by_index(i)
+            if 'ReSpeaker' in info['name']:
+                self.device_index = i
+                break
         if self.device_index is None:
             raise RuntimeError('ReSpeaker device not found')
         
